@@ -1,9 +1,9 @@
 import { ThemedText } from '@/components/themed-text';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useState } from 'react';
-import { ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
-
+import { HabitRow, useHabits } from '@/hooks/use-habits';
+import { useRouter } from 'expo-router';
+import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 const Theme = {
   // Hero banner
@@ -33,12 +33,6 @@ const Theme = {
   // Dividers
   dividerLight:  '#E8E5E0',
   dividerDark:   '#2C2C2C',
-
-  // Category accent colours 
-  exercise:  '#3A7D5A',
-  hydration: '#2E6E8E',
-  nutrition: '#B07D3A',
-  mind:      '#6B5B8A',
 };
 
 // Static challenge config
@@ -63,90 +57,7 @@ function formatDate(): string {
   });
 }
 
-// Static tasks
-
-type Task = {
-  id: number;
-  name: string;
-  categoryName: string;
-  categoryColour: string;
-  categoryIcon: string;
-  completed: boolean;
-  streak: number;
-  weeklyDone: number;
-  weeklyGoal: number;
-};
-
-const INITIAL_TASKS: Task[] = [
-  {
-    id: 1,
-    name: 'Workout 1 (45 min)',
-    categoryName: 'Exercise',
-    categoryColour: Theme.exercise,
-    categoryIcon: '🏃',
-    completed: false,
-    streak: 12,
-    weeklyDone: 4,
-    weeklyGoal: 7,
-  },
-  {
-    id: 2,
-    name: 'Workout 2 — Outdoor (45 min)',
-    categoryName: 'Exercise',
-    categoryColour: Theme.exercise,
-    categoryIcon: '🏃',
-    completed: false,
-    streak: 12,
-    weeklyDone: 4,
-    weeklyGoal: 7,
-  },
-  {
-    id: 3,
-    name: 'Drink 1 Gallon of Water',
-    categoryName: 'Hydration',
-    categoryColour: Theme.hydration,
-    categoryIcon: '💧',
-    completed: false,
-    streak: 18,
-    weeklyDone: 5,
-    weeklyGoal: 7,
-  },
-  {
-    id: 4,
-    name: 'Follow Diet Plan',
-    categoryName: 'Nutrition',
-    categoryColour: Theme.nutrition,
-    categoryIcon: '🥗',
-    completed: false,
-    streak: 9,
-    weeklyDone: 5,
-    weeklyGoal: 7,
-  },
-  {
-    id: 5,
-    name: 'No Alcohol or Cheat Meals',
-    categoryName: 'Nutrition',
-    categoryColour: Theme.nutrition,
-    categoryIcon: '🥗',
-    completed: false,
-    streak: 9,
-    weeklyDone: 5,
-    weeklyGoal: 7,
-  },
-  {
-    id: 6,
-    name: 'Read 10 Pages of Nonfiction',
-    categoryName: 'Mindfulness',
-    categoryColour: Theme.mind,
-    categoryIcon: '📖',
-    completed: false,
-    streak: 21,
-    weeklyDone: 6,
-    weeklyGoal: 7,
-  },
-];
-
-// Challenge Banner 
+// Challenge Banner
 
 function ChallengeBanner({ dayNumber, scheme }: { dayNumber: number; scheme: 'light' | 'dark' }) {
   const remaining = Math.max(0, CHALLENGE_DAYS - dayNumber);
@@ -242,7 +153,7 @@ const banner = StyleSheet.create({
   remainLabel: { fontSize: 9, fontWeight: '600', letterSpacing: 1, color: Theme.heroTextDim },
 });
 
-// Daily Stats 
+// Daily Stats
 
 function DailyStats({
   completed,
@@ -254,7 +165,7 @@ function DailyStats({
   total: number;
   streak: number;
   scheme: 'light' | 'dark';
-}) { 
+}) {
   const cardBg = scheme === 'dark' ? Theme.statBgDark : Theme.statBgLight;
   const percentage = total === 0 ? 0 : Math.round((completed / total) * 100);
   const allDone = completed === total && total > 0;
@@ -302,44 +213,44 @@ const stats = StyleSheet.create({
 // Task Card
 
 function TaskCard({
-  task,
-  onToggle,
+  habit,
   scheme,
+  onToggle,
 }: {
-  task: Task;
-  onToggle: (id: number) => void;
+  habit: HabitRow;
   scheme: 'light' | 'dark';
+  onToggle: (id: number) => void;
 }) {
   const cardBg = scheme === 'dark' ? Theme.cardBgDark : Theme.cardBgLight;
   const muted = scheme === 'dark' ? Theme.mutedDark : Theme.mutedLight;
-  const done = task.completed;
+  const done = habit.completed;
 
   return (
     <TouchableOpacity
       style={[card.container, { backgroundColor: cardBg }, done && card.containerDone]}
-      onPress={() => onToggle(task.id)}
+      onPress={() => onToggle(habit.id)}
       activeOpacity={0.7}
     >
       {/* Left accent bar — full colour when done, ghost when pending */}
       <View
         style={[
           card.accent,
-          { backgroundColor: done ? task.categoryColour : task.categoryColour + '40' },
+          { backgroundColor: done ? habit.categoryColour : habit.categoryColour + '40' },
         ]}
       />
 
       <View style={card.body}>
         <View style={card.topRow}>
           {/* Icon chip */}
-          <View style={[card.iconChip, { backgroundColor: task.categoryColour + '16' }]}>
-            <ThemedText style={card.iconText}>{task.categoryIcon}</ThemedText>
+          <View style={[card.iconChip, { backgroundColor: habit.categoryColour + '16' }]}>
+            <ThemedText style={card.iconText}>{habit.categoryIcon}</ThemedText>
           </View>
 
           <View style={card.textBlock}>
-            <ThemedText style={[card.name, done && card.nameDone]}>{task.name}</ThemedText>
+            <ThemedText style={[card.name, done && card.nameDone]}>{habit.name}</ThemedText>
             <ThemedText style={[card.category, { color: muted }]}>
-              {task.categoryName}
-              {task.streak > 1 ? `  ·  🔥 ${task.streak}d` : ''}
+              {habit.categoryName}
+              {habit.streak > 1 ? `    🔥 ${habit.streak}d` : ''}
             </ThemedText>
           </View>
 
@@ -348,8 +259,8 @@ function TaskCard({
             style={[
               card.circle,
               done
-                ? { backgroundColor: task.categoryColour, borderColor: task.categoryColour }
-                : { borderColor: task.categoryColour + '55' },
+                ? { backgroundColor: habit.categoryColour, borderColor: habit.categoryColour }
+                : { borderColor: habit.categoryColour + '55' },
             ]}
           >
             {done && <ThemedText style={card.tick}>✓</ThemedText>}
@@ -363,14 +274,14 @@ function TaskCard({
               style={[
                 card.weeklyFill,
                 {
-                  width: `${Math.min((task.weeklyDone / task.weeklyGoal) * 100, 100)}%`,
-                  backgroundColor: task.categoryColour,
+                  width: `${Math.min(((habit.weeklyDone) / (habit.weeklyGoal ?? 7)) * 100, 100)}%`,
+                  backgroundColor: habit.categoryColour,
                 },
               ]}
             />
           </View>
           <ThemedText style={[card.weeklyLabel, { color: muted }]}>
-            {task.weeklyDone}/{task.weeklyGoal} wk
+            {habit.weeklyDone}/{habit.weeklyGoal ?? 7} wk
           </ThemedText>
         </View>
       </View>
@@ -427,29 +338,44 @@ const card = StyleSheet.create({
   weeklyLabel: { fontSize: 11 },
 });
 
-// Dashboard Screen 
+// Dashboard Screen
 
 export default function DashboardScreen() {
   const scheme = useColorScheme() ?? 'light';
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const router = useRouter();
   const dayNumber = getDayNumber();
-
-  function handleToggle(id: number) {
-    setTasks((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t))
-    );
-  }
-
-  const completed = tasks.filter((t) => t.completed).length;
-  const total = tasks.length;
-  const topStreak = tasks.reduce((max, t) => Math.max(max, t.streak), 0);
-  const allDone = completed === total && total > 0;
+  const { groups, loading, upsertLog } = useHabits();
   const muted = scheme === 'dark' ? Theme.mutedDark : Theme.mutedLight;
 
-  const sorted = [...tasks].sort((a, b) => {
+  // Flatten all habits across groups into a single list for the dashboard checklist
+  const allHabits = groups.flatMap((g) => g.habits);
+
+  // Toggle completion status for a habit by upserting a log with the opposite of its current completed value
+  async function handleToggle(habitId: number) {
+    const habit = allHabits.find((h) => h.id === habitId);
+    if (!habit) return;
+    await upsertLog(habitId, !habit.completed, habit.count);
+  }
+
+  const completed = allHabits.filter((h) => h.completed).length;
+  const total = allHabits.length;
+  const topStreak = allHabits.reduce((max, h) => Math.max(max, h.streak), 0);
+  const allDone = completed === total && total > 0;
+
+  // Completed habits sink to bottom
+  const sorted = [...allHabits].sort((a, b) => {
     if (a.completed === b.completed) return 0;
     return a.completed ? 1 : -1;
   });
+
+  // Show loading state while habits are being fetched from the database
+  if (loading) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors[scheme].background }}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -470,10 +396,27 @@ export default function DashboardScreen() {
 
       <DailyStats completed={completed} total={total} streak={topStreak} scheme={scheme} />
 
+      <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
+        <TouchableOpacity
+          style={[screen.checkInBtn, { flex: 1, marginBottom: 0, backgroundColor: '#0a7ea4' }]}
+          onPress={() => router.push('/check-in')}
+          activeOpacity={0.8}
+        >
+          <Text style={screen.checkInBtnText}>📋  Daily Check-In</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[screen.checkInBtn, { flex: 1, marginBottom: 0, backgroundColor: scheme === 'dark' ? '#252525' : '#EFEDE9' }]}
+          onPress={() => router.push('/logs')}
+          activeOpacity={0.8}
+        >
+          <Text style={[screen.checkInBtnText, { color: scheme === 'dark' ? '#9A9590' : '#6B6560' }]}>📖  Log History</Text>
+        </TouchableOpacity>
+      </View>
+
       <ThemedText style={screen.sectionTitle}>{"Today's Checklist"}</ThemedText>
 
-      {sorted.map((t) => (
-        <TaskCard key={t.id} task={t} onToggle={handleToggle} scheme={scheme} />
+      {sorted.map((h) => (
+        <TaskCard key={h.id} habit={h} onToggle={handleToggle} scheme={scheme} />
       ))}
 
       <View style={{ height: 40 }} />
@@ -505,4 +448,11 @@ const screen = StyleSheet.create({
     opacity: 0.45,
     marginBottom: 12,
   },
+  checkInBtn: {
+    borderRadius: 14,
+    paddingVertical: 16,
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  checkInBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

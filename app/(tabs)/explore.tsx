@@ -1,8 +1,8 @@
 import { ThemedText } from '@/components/themed-text';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useState } from 'react';
-import { ScrollView, StyleSheet, TouchableOpacity, View, } from 'react-native';
+import { CategoryGroup, HabitRow, useHabits } from '@/hooks/use-habits';
+import { ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 
 // Theme colors
 
@@ -16,76 +16,10 @@ const Theme = {
   mutedDark:    '#9A9590',
   dividerLight: '#E8E5E0',
   dividerDark:  '#2C2C2C',
-  exercise:     '#3A7D5A',
-  hydration:    '#2E6E8E',
-  nutrition:    '#B07D3A',
-  mind:         '#6B5B8A',
 };
 
-// Static tasks
+// Progress Bar
 
-type HabitRow = {
-  id: number;
-  name: string;
-  type: 'boolean' | 'count';
-  completed: boolean;
-  count: number;
-  streak: number;
-  weeklyDone: number;
-  weeklyGoal: number;
-};
-
-type CategoryGroup = {
-  id: number;
-  name: string;
-  colour: string;
-  icon: string;
-  habits: HabitRow[];
-};
-
-// Hardcoded initial data
-const INITIAL_GROUPS: CategoryGroup[] = [
-  {
-    id: 1,
-    name: 'Exercise',
-    colour: Theme.exercise,
-    icon: '🏃',
-    habits: [
-      { id: 1, name: 'Workout 1 (45 min)', type: 'boolean', completed: false, count: 0, streak: 12, weeklyDone: 4, weeklyGoal: 7 },
-      { id: 2, name: 'Workout 2 — Outdoor (45 min)', type: 'boolean', completed: false, count: 0, streak: 12, weeklyDone: 4, weeklyGoal: 7 },
-    ],
-  },
-  {
-    id: 2,
-    name: 'Hydration',
-    colour: Theme.hydration,
-    icon: '💧',
-    habits: [
-      { id: 3, name: 'Drink 1 Gallon of Water', type: 'count', completed: false, count: 0, streak: 18, weeklyDone: 5, weeklyGoal: 7 },
-    ],
-  },
-  {
-    id: 3,
-    name: 'Nutrition',
-    colour: Theme.nutrition,
-    icon: '🥗',
-    habits: [
-      { id: 4, name: 'Follow Diet Plan', type: 'boolean', completed: false, count: 0, streak: 9, weeklyDone: 5, weeklyGoal: 7 },
-      { id: 5, name: 'No Alcohol or Cheat Meals', type: 'boolean', completed: false, count: 0, streak: 9, weeklyDone: 5, weeklyGoal: 7 },
-    ],
-  },
-  {
-    id: 4,
-    name: 'Mindfulness',
-    colour: Theme.mind,
-    icon: '📖',
-    habits: [
-      { id: 6, name: 'Read 10 Pages of Nonfiction', type: 'boolean', completed: false, count: 0, streak: 21, weeklyDone: 6, weeklyGoal: 7 },
-    ],
-  },
-];
-
-// Progress Bar 
 function ProgressBar({ done, goal, colour }: { done: number; goal: number; colour: string }) {
   const pct = goal > 0 ? Math.min(done / goal, 1) : 0;
   return (
@@ -100,7 +34,8 @@ const bar = StyleSheet.create({
   fill: { height: 4, borderRadius: 2 },
 });
 
-// Count Stepper 
+// Count Stepper
+
 function CountStepper({
   value,
   colour,
@@ -147,6 +82,8 @@ const stepper = StyleSheet.create({
   value: { fontSize: 17, fontWeight: '700', minWidth: 26, textAlign: 'center' },
 });
 
+// Habit Row
+
 function RuleRow({ habit, colour, scheme, onToggle, onCount, isLast }: {
   habit: HabitRow;
   colour: string;
@@ -177,9 +114,9 @@ function RuleRow({ habit, colour, scheme, onToggle, onCount, isLast }: {
           )}
         </View>
         <View style={row.targetRow}>
-          <ProgressBar done={habit.weeklyDone} goal={habit.weeklyGoal} colour={colour} />
+          <ProgressBar done={habit.weeklyDone} goal={habit.weeklyGoal ?? 7} colour={colour} />
           <ThemedText style={[row.targetLabel, { color: muted }]}>
-            {habit.weeklyDone}/{habit.weeklyGoal} wk
+            {habit.weeklyDone}/{habit.weeklyGoal ?? 7} wk
           </ThemedText>
         </View>
       </View>
@@ -229,7 +166,7 @@ const row = StyleSheet.create({
   checkMark: { color: '#fff', fontSize: 14, fontWeight: '700' },
 });
 
-// Rule Group Card 
+// Rule Group Card
 
 function RuleGroup({
   group,
@@ -327,34 +264,45 @@ const grp = StyleSheet.create({
 
 export default function ChallengeScreen() {
   const scheme = useColorScheme() ?? 'light';
-  const [groups, setGroups] = useState<CategoryGroup[]>(INITIAL_GROUPS);
   const muted = scheme === 'dark' ? Theme.mutedDark : Theme.mutedLight;
+  const { groups, loading, upsertLog } = useHabits();
 
-  function handleToggle(habitId: number) {
-    setGroups((prev) =>
-      prev.map((g) => ({
-        ...g,
-        habits: g.habits.map((h) =>
-          h.id === habitId ? { ...h, completed: !h.completed } : h
-        ),
-      }))
-    );
+  async function handleToggle(habitId: number) {
+    // Find the current completed state across all groups
+    for (const g of groups) {
+      const habit = g.habits.find((h) => h.id === habitId);
+      if (habit) {
+        // Toggle, if currently completed mark incomplete (completed=false, count unchanged)
+        await upsertLog(habitId, !habit.completed, habit.count);
+        return;
+      }
+    }
   }
 
-  function handleCount(habitId: number, newCount: number) {
-    setGroups((prev) =>
-      prev.map((g) => ({
-        ...g,
-        habits: g.habits.map((h) =>
-          h.id === habitId ? { ...h, count: newCount, completed: newCount > 0 } : h
-        ),
-      }))
-    );
+  // For count habits, update the count in the log while keeping completed true as long as count > 0
+  async function handleCount(habitId: number, newCount: number) {
+    for (const g of groups) {
+      const habit = g.habits.find((h) => h.id === habitId);
+      if (habit) {
+        const completed = newCount > 0;
+        await upsertLog(habitId, completed, newCount);
+        return;
+      }
+    }
   }
 
+  // Calculate totals for the summary line by flattening all habits across groups and counting completed vs total
   const totalHabits = groups.reduce((s, g) => s + g.habits.length, 0);
   const doneHabits = groups.reduce((s, g) => s + g.habits.filter((h) => h.completed).length, 0);
   const allDone = doneHabits === totalHabits && totalHabits > 0;
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors[scheme].background }}>
+        <ActivityIndicator />
+      </View>
+    );
+  }
 
   return (
     <ScrollView
