@@ -12,6 +12,7 @@ import {
   Platform,
   ScrollView,
   StyleSheet,
+  Text,
   TextInput,
   TouchableOpacity,
   View,
@@ -59,7 +60,10 @@ function OptionPill<T extends string | number>({
       activeOpacity={0.75}
     >
       <ThemedText
-        style={[styles.pillText, selected && { color: '#fff' }]}
+        style={[
+          styles.pillText,
+          { color: selected ? '#fff' : scheme === 'dark' ? '#E5E7EB' : '#111827' },
+        ]}
       >
         {label}
       </ThemedText>
@@ -294,7 +298,7 @@ export default function AddHabitScreen() {
           {saving ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <ThemedText style={styles.saveBtnText}>Save Habit</ThemedText>
+            <Text style={styles.saveBtnText}>Save Habit</Text>
           )}
         </TouchableOpacity>
 

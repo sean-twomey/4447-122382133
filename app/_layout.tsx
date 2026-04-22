@@ -48,12 +48,25 @@ export default function RootLayout() {
           }}
         />
         <Stack.Screen
-          name="habit/[id]"
+          name="check-in"
           options={{
-            title: '',
+            title: "Daily Check-In",
             presentation: 'card',
-            headerBackTitle: 'Habits',
+            headerBackTitle: 'Back',
             headerTintColor: Colors[colorScheme].tint,
+            headerStyle: { backgroundColor: Colors[colorScheme].background },
+            headerShadowVisible: false,
+          }}
+        />
+        <Stack.Screen
+          name="logs"
+          options={{
+            title: 'Log History',
+            presentation: 'card',
+            headerBackTitle: 'Back',
+            headerTintColor: Colors[colorScheme].tint,
+            headerStyle: { backgroundColor: Colors[colorScheme].background },
+            headerShadowVisible: false,
           }}
         />
       </Stack>
