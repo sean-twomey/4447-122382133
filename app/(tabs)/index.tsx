@@ -1,55 +1,129 @@
 import { ThemedText } from '@/components/themed-text';
+import { ProgressRow, SectionHeader, appColors, divider, headerSurface, muted, softSurface, surface } from '@/components/ui';
+import { IconSymbol } from '@/components/ui/icon-symbol';
 import { Colors } from '@/constants/theme';
+import { useAuth } from '@/context/auth';
+import { db } from '@/db/client';
+import { categories, habitLogs, habits, targets } from '@/db/schema';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { HabitRow, useHabits } from '@/hooks/use-habits';
-import { useRouter } from 'expo-router';
+import { and, eq, gte, inArray, lte } from 'drizzle-orm';
+import { useFocusEffect, useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-const Theme = {
-  // Hero banner
-  heroBgLight:   '#1C1C1E',
-  heroBgDark:    '#141414',
-  heroAccent:    '#C9A84C',
-  heroAccentDim: '#C9A84C66',
-  heroText:      '#F5F0E8',
-  heroTextDim:   '#F5F0E899',
-
-  // Completion / success
-  green:         '#2D6A4F',
-  greenLight:    '#2D6A4F18',
-
-  // Card surfaces
-  cardBgLight:   '#F7F6F4',
-  cardBgDark:    '#1E1E1E',
-
-  // Stat cards
-  statBgLight:   '#EFEDE9',
-  statBgDark:    '#252525',
-
-  // Muted text
-  mutedLight:    '#6B6560',
-  mutedDark:     '#9A9590',
-
-  // Dividers
-  dividerLight:  '#E8E5E0',
-  dividerDark:   '#2C2C2C',
+type HabitRow = {
+  id: number;
+  name: string;
+  categoryName: string;
+  categoryColour: string;
+  categoryIcon: string;
+  completed: boolean;
+  weeklyGoal: number | null;
+  weeklyDone: number;
 };
 
-// Static challenge config
+type ProgressState = {
+  weeklyCompletedDays: number;
+  completedDays: number;
+  currentStreak: number;
+  bestStreak: number;
+};
 
-const CHALLENGE_START = new Date('2026-03-01');
-const CHALLENGE_DAYS = 75;
-
-function getDayNumber(): number {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const start = new Date(CHALLENGE_START);
-  start.setHours(0, 0, 0, 0);
-  const diff = Math.floor((today.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-  return Math.max(1, Math.min(diff + 1, CHALLENGE_DAYS));
+function toDateString(date: Date) {
+  return date.toISOString().slice(0, 10);
 }
 
-function formatDate(): string {
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
+}
+
+function getWeekStart(date: Date) {
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(date);
+  monday.setDate(date.getDate() + diff);
+  return toDateString(monday);
+}
+
+function countCompleted(logs: { habitId: number; completed: number }[]) {
+  const counts = new Map<number, number>();
+  for (const log of logs) {
+    if (log.completed !== 1) continue;
+    counts.set(log.habitId, (counts.get(log.habitId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+// Build a map of date to set of completed habitIds
+function completedDayStats(
+  logs: { date: string; habitId: number; completed: number }[],
+  habitCount: number,
+  fromDate: string,
+  toDate: string
+) {
+  const dayMap = new Map<string, Set<number>>();
+  for (const log of logs) {
+    if (log.completed !== 1) continue;
+    const set = dayMap.get(log.date) ?? new Set<number>();
+    set.add(log.habitId);
+    dayMap.set(log.date, set);
+  }
+
+  // Count how many days had all habits completed
+  let completedDays = 0;
+  const cursor = new Date(fromDate + 'T12:00:00');
+  while (toDateString(cursor) <= toDate) {
+    if ((dayMap.get(toDateString(cursor))?.size ?? 0) === habitCount) completedDays++;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  return { dayMap, completedDays };
+}
+
+function getCurrentStreak(
+  dayMap: Map<string, Set<number>>,
+  habitCount: number,
+  fromDate: string,
+  earliestTracked?: string
+) {
+  if (habitCount === 0) return 0;
+  let streak = 0;
+  const cursor = new Date(fromDate + 'T12:00:00');
+  while (!earliestTracked || toDateString(cursor) >= earliestTracked) {
+    if ((dayMap.get(toDateString(cursor))?.size ?? 0) !== habitCount) break;
+    streak++;
+    cursor.setDate(cursor.getDate() - 1);
+  }
+  return streak;
+}
+
+// Iterate through the tracked date range to find the longest run of consecutive days with all habits completed
+function getBestStreak(
+  dayMap: Map<string, Set<number>>,
+  habitCount: number,
+  trackedDates: string[]
+) {
+  if (habitCount === 0 || trackedDates.length === 0) return 0;
+  let best = 0;
+  let current = 0;
+  const cursor = new Date(trackedDates[0] + 'T12:00:00');
+  const last = trackedDates[trackedDates.length - 1];
+  while (toDateString(cursor) <= last) {
+    if ((dayMap.get(toDateString(cursor))?.size ?? 0) === habitCount) {
+      current++;
+      best = Math.max(best, current);
+    } else {
+      current = 0;
+    }
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return best;
+}
+
+function formatDate() {
   return new Date().toLocaleDateString('en-IE', {
     weekday: 'long',
     month: 'long',
@@ -57,402 +131,471 @@ function formatDate(): string {
   });
 }
 
-// Challenge Banner
-
-function ChallengeBanner({ dayNumber, scheme }: { dayNumber: number; scheme: 'light' | 'dark' }) {
-  const remaining = Math.max(0, CHALLENGE_DAYS - dayNumber);
-  const progress = dayNumber / CHALLENGE_DAYS;
-  const bg = scheme === 'dark' ? Theme.heroBgDark : Theme.heroBgLight;
-
-  return (
-    <View style={[banner.container, { backgroundColor: bg }]}>
-      {/* Left — day counter */}
-      <View style={banner.left}>
-        <ThemedText style={banner.dayLabel}>DAY</ThemedText>
-        <ThemedText style={banner.dayNumber}>{dayNumber}</ThemedText>
-        <ThemedText style={banner.dayOf}>of {CHALLENGE_DAYS}</ThemedText>
-      </View>
-
-      {/* Divider */}
-      <View style={banner.divider} />
-
-      {/* Centre — title + progress */}
-      <View style={banner.center}>
-        <ThemedText style={banner.challengeTitle}>75 HARD</ThemedText>
-        <ThemedText style={banner.challengeSub}>Mental Toughness Program</ThemedText>
-
-        {/* Gold progress bar */}
-        <View style={banner.progressTrack}>
-          <View style={[banner.progressFill, { width: `${progress * 100}%` }]} />
-        </View>
-
-        <ThemedText style={banner.progressLabel}>
-          {Math.round(progress * 100)}% complete
-        </ThemedText>
-      </View>
-
-      {/* Divider */}
-      <View style={banner.divider} />
-
-      {/* Right — days remaining */}
-      <View style={banner.right}>
-        <ThemedText style={banner.remainLabel}>LEFT</ThemedText>
-        <ThemedText style={banner.remainNumber}>{remaining}</ThemedText>
-        <ThemedText style={banner.remainLabel}>days</ThemedText>
-      </View>
-    </View>
-  );
-}
-
-const banner = StyleSheet.create({
-  container: {
-    borderRadius: 18,
-    padding: 22,
-    marginBottom: 16,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 16,
-    shadowColor: '#000',
-    shadowOpacity: 0.18,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 6,
-  },
-  divider: {
-    width: 1,
-    height: 52,
-    backgroundColor: '#FFFFFF14',
-  },
-  left: { alignItems: 'center', minWidth: 40 },
-  dayLabel: { fontSize: 9, fontWeight: '700', letterSpacing: 1.5, color: Theme.heroAccentDim },
-  dayNumber: { fontSize: 34, fontWeight: '800', lineHeight: 38, color: Theme.heroAccent },
-  dayOf: { fontSize: 10, fontWeight: '500', color: Theme.heroTextDim },
-  center: { flex: 1, gap: 4, alignItems: 'flex-start' },
-  challengeTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    letterSpacing: 3,
-    color: Theme.heroText,
-  },
-  challengeSub: { fontSize: 10, color: Theme.heroTextDim, marginBottom: 8, letterSpacing: 0.3 },
-  progressTrack: {
-    width: '100%',
-    height: 4,
-    backgroundColor: '#FFFFFF14',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  progressFill: {
-    height: 4,
-    backgroundColor: Theme.heroAccent,
-    borderRadius: 2,
-  },
-  progressLabel: { fontSize: 10, color: Theme.heroTextDim, marginTop: 4 },
-  right: { alignItems: 'center', minWidth: 40 },
-  remainNumber: { fontSize: 28, fontWeight: '800', lineHeight: 32, color: Theme.heroText },
-  remainLabel: { fontSize: 9, fontWeight: '600', letterSpacing: 1, color: Theme.heroTextDim },
-});
-
-// Daily Stats
-
-function DailyStats({
-  completed,
-  total,
-  streak,
+function SummaryCard({
+  summary,
   scheme,
 }: {
-  completed: number;
-  total: number;
-  streak: number;
+  summary: ProgressState;
   scheme: 'light' | 'dark';
 }) {
-  const cardBg = scheme === 'dark' ? Theme.statBgDark : Theme.statBgLight;
-  const percentage = total === 0 ? 0 : Math.round((completed / total) * 100);
-  const allDone = completed === total && total > 0;
-  const muted = scheme === 'dark' ? Theme.mutedDark : Theme.mutedLight;
+  const rows = [
+    { label: 'This week', value: `${summary.weeklyCompletedDays}/7 days` },
+    { label: 'Completed days', value: String(summary.completedDays) },
+    { label: 'Current streak', value: `${summary.currentStreak} days` },
+    { label: 'Best streak', value: `${summary.bestStreak} days` },
+  ];
 
   return (
-    <View style={stats.row}>
-      <View style={[stats.card, { backgroundColor: cardBg }]}>
-        <ThemedText style={stats.statValue}>{completed}/{total}</ThemedText>
-        <ThemedText style={[stats.statLabel, { color: muted }]}>Done today</ThemedText>
+    <View style={[styles.panel, { backgroundColor: surface(scheme) }]}>
+      <ThemedText style={styles.cardTitle}>Weekly progress</ThemedText>
+      <View style={styles.summaryRows}>
+        {rows.map((row) => (
+          <View key={row.label} style={[styles.summaryRow, { borderBottomColor: divider(scheme) }]}>
+            <ThemedText style={[styles.summaryLabel, { color: muted(scheme) }]}>{row.label}</ThemedText>
+            <ThemedText style={styles.summaryValue}>{row.value}</ThemedText>
+          </View>
+        ))}
       </View>
-
-      <View
-        style={[
-          stats.card,
-          stats.cardCenter,
-          { backgroundColor: allDone ? Theme.green : cardBg },
-        ]}
-      >
-        <ThemedText style={[stats.statValueLarge, allDone && { color: '#fff' }]}>
-          {percentage}%
-        </ThemedText>
-        <ThemedText style={[stats.statLabel, { color: allDone ? '#ffffff88' : muted }]}>
-          {allDone ? 'Complete' : 'Progress'}
-        </ThemedText>
-      </View>
-
-      <View style={[stats.card, { backgroundColor: cardBg }]}>
-        <ThemedText style={stats.statValue}>🔥 {streak}</ThemedText>
-        <ThemedText style={[stats.statLabel, { color: muted }]}>Day streak</ThemedText>
-      </View>
+      <ProgressRow
+        done={summary.weeklyCompletedDays}
+        goal={7}
+        colour={appColors.tint}
+        scheme={scheme}
+        label="Weekly completion"
+        rightText={`${summary.weeklyCompletedDays}/7`}
+      />
     </View>
   );
 }
 
-const stats = StyleSheet.create({
-  row: { flexDirection: 'row', gap: 10, marginBottom: 24 },
-  card: { flex: 1, borderRadius: 13, padding: 14, alignItems: 'center', gap: 3 },
-  cardCenter: { flex: 1.2 },
-  statValue: { fontSize: 17, fontWeight: '700' },
-  statValueLarge: { fontSize: 21, fontWeight: '800' },
-  statLabel: { fontSize: 11, textAlign: 'center' },
-});
+function TodayCard({ completed, total, scheme, onCheckIn, onTargets }: {
+  completed: number;
+  total: number;
+  scheme: 'light' | 'dark';
+  onCheckIn: () => void;
+  onTargets: () => void;
+}) {
+  const allDone = completed === total && total > 0;
+  const remaining = Math.max(total - completed, 0);
+  const subcopy = total === 0
+    ? 'No habits added yet.'
+    : allDone
+      ? 'Everything is logged for today.'
+      : `${remaining} ${remaining === 1 ? 'habit' : 'habits'} left today.`;
 
-// Task Card
+  return (
+    <View style={[styles.panel, styles.checkInCard, { backgroundColor: surface(scheme) }]}>
+      <View style={styles.checkInHeader}>
+        <View style={styles.checkInCopy}>
+          <ThemedText style={styles.cardTitle}>Today</ThemedText>
+          <ThemedText style={[styles.checkInSubcopy, { color: muted(scheme) }]}>{subcopy}</ThemedText>
+        </View>
+        <View style={[styles.todayCountBadge, { backgroundColor: softSurface(scheme) }]}>
+          <ThemedText style={[styles.todayCountValue, allDone ? { color: appColors.success } : null]}>
+            {completed}/{total}
+          </ThemedText>
+        </View>
+      </View>
 
-function TaskCard({
-  habit,
-  scheme,
-  onToggle,
-}: {
+      <TouchableOpacity
+        style={styles.mainAction}
+        onPress={onCheckIn}
+        activeOpacity={0.8}
+        accessibilityLabel="Open daily check-in"
+      >
+        <Text style={styles.mainActionText}>Complete Today&apos;s Check-In</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.secondaryAction}
+        onPress={onTargets}
+        activeOpacity={0.8}
+        accessibilityLabel="View targets"
+      >
+        <Text style={[styles.secondaryActionText, { color: muted(scheme) }]}>View Targets</Text>
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+function DailyStats({ completed, total, scheme }: {
+  completed: number;
+  total: number;
+  scheme: 'light' | 'dark';
+}) {
+  const allDone = completed === total && total > 0;
+
+  return (
+    <View style={[styles.inlineSummary, { borderColor: divider(scheme) }]}>
+      <View>
+        <ThemedText style={[styles.inlineSummaryValue, allDone ? { color: appColors.success } : null]}>
+          {completed}/{total}
+        </ThemedText>
+        <ThemedText style={[styles.inlineSummaryLabel, { color: muted(scheme) }]}>
+          habits completed today
+        </ThemedText>
+      </View>
+      <ThemedText style={[styles.inlineSummaryStatus, { color: allDone ? appColors.success : muted(scheme) }]}>
+        {allDone ? 'All done' : 'In progress'}
+      </ThemedText>
+    </View>
+  );
+}
+
+function HabitsSection({ children, total, scheme }: {
+  children: React.ReactNode;
+  total: number;
+  scheme: 'light' | 'dark';
+}) {
+  return (
+    <View style={[styles.panel, styles.habitsPanel, { backgroundColor: surface(scheme) }]}>
+      <SectionHeader title="Today's habits" rightText={`${total}`} scheme={scheme} />
+      <View style={styles.habitsList}>{children}</View>
+    </View>
+  );
+}
+
+function DashboardHabit({ habit, scheme, onToggle }: {
   habit: HabitRow;
   scheme: 'light' | 'dark';
   onToggle: (id: number) => void;
 }) {
-  const cardBg = scheme === 'dark' ? Theme.cardBgDark : Theme.cardBgLight;
-  const muted = scheme === 'dark' ? Theme.mutedDark : Theme.mutedLight;
-  const done = habit.completed;
+  const goal = habit.weeklyGoal ?? 7;
 
   return (
     <TouchableOpacity
-      style={[card.container, { backgroundColor: cardBg }, done && card.containerDone]}
+      style={[styles.habitRow, { borderBottomColor: divider(scheme) }]}
       onPress={() => onToggle(habit.id)}
-      activeOpacity={0.7}
+      activeOpacity={0.8}
+      accessibilityRole="button"
+      accessibilityLabel={habit.name}
     >
-      {/* Left accent bar — full colour when done, ghost when pending */}
-      <View
-        style={[
-          card.accent,
-          { backgroundColor: done ? habit.categoryColour : habit.categoryColour + '40' },
-        ]}
-      />
-
-      <View style={card.body}>
-        <View style={card.topRow}>
-          {/* Icon chip */}
-          <View style={[card.iconChip, { backgroundColor: habit.categoryColour + '16' }]}>
-            <ThemedText style={card.iconText}>{habit.categoryIcon}</ThemedText>
+      <View style={styles.habitRowTop}>
+        <View style={styles.habitMeta}>
+          <View style={[styles.habitIconBadge, { backgroundColor: habit.categoryColour + '22' }]}>
+            <ThemedText style={styles.habitIcon}>{habit.categoryIcon ?? '•'}</ThemedText>
           </View>
-
-          <View style={card.textBlock}>
-            <ThemedText style={[card.name, done && card.nameDone]}>{habit.name}</ThemedText>
-            <ThemedText style={[card.category, { color: muted }]}>
-              {habit.categoryName}
-              {habit.streak > 1 ? `    🔥 ${habit.streak}d` : ''}
-            </ThemedText>
-          </View>
-
-          {/* Completion indicator */}
-          <View
-            style={[
-              card.circle,
-              done
-                ? { backgroundColor: habit.categoryColour, borderColor: habit.categoryColour }
-                : { borderColor: habit.categoryColour + '55' },
-            ]}
-          >
-            {done && <ThemedText style={card.tick}>✓</ThemedText>}
+          <View style={styles.habitTextBlock}>
+            <ThemedText style={[styles.habitName, habit.completed && styles.habitNameDone]}>{habit.name}</ThemedText>
+            <ThemedText style={[styles.habitCategory, { color: muted(scheme) }]}>{habit.categoryName}</ThemedText>
           </View>
         </View>
-
-        {/* Weekly progress */}
-        <View style={card.weeklyRow}>
-          <View style={card.weeklyTrack}>
-            <View
-              style={[
-                card.weeklyFill,
-                {
-                  width: `${Math.min(((habit.weeklyDone) / (habit.weeklyGoal ?? 7)) * 100, 100)}%`,
-                  backgroundColor: habit.categoryColour,
-                },
-              ]}
-            />
-          </View>
-          <ThemedText style={[card.weeklyLabel, { color: muted }]}>
-            {habit.weeklyDone}/{habit.weeklyGoal ?? 7} wk
-          </ThemedText>
+        <View
+          style={[
+            styles.habitCheck,
+            habit.completed
+              ? { backgroundColor: appColors.success, borderColor: appColors.success }
+              : { borderColor: divider(scheme) },
+          ]}
+        >
+          {habit.completed ? <ThemedText style={styles.habitCheckText}>✓</ThemedText> : null}
         </View>
       </View>
+
+      <ProgressRow
+        done={habit.weeklyDone}
+        goal={goal}
+        colour={appColors.tint}
+        scheme={scheme}
+        label="This week"
+        rightText={`${habit.weeklyDone}/${goal}`}
+      />
     </TouchableOpacity>
   );
 }
 
-const card = StyleSheet.create({
-  container: {
-    borderRadius: 14,
-    marginBottom: 9,
-    flexDirection: 'row',
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
-  },
-  containerDone: { opacity: 0.75 },
-  accent: { width: 4 },
-  body: { flex: 1, padding: 14, gap: 10 },
-  topRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-  iconChip: {
-    width: 38,
-    height: 38,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  iconText: { fontSize: 19 },
-  textBlock: { flex: 1 },
-  name: { fontSize: 15, fontWeight: '600', lineHeight: 20 },
-  nameDone: { opacity: 0.45 },
-  category: { fontSize: 12, marginTop: 2 },
-  circle: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tick: { color: '#fff', fontSize: 13, fontWeight: '800' },
-  weeklyRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  weeklyTrack: {
-    flex: 1,
-    height: 3,
-    backgroundColor: '#00000010',
-    borderRadius: 2,
-    overflow: 'hidden',
-  },
-  weeklyFill: { height: 3, borderRadius: 2 },
-  weeklyLabel: { fontSize: 11 },
-});
-
-// Dashboard Screen
-
 export default function DashboardScreen() {
   const scheme = useColorScheme() ?? 'light';
   const router = useRouter();
-  const dayNumber = getDayNumber();
-  const { groups, loading, upsertLog } = useHabits();
-  const muted = scheme === 'dark' ? Theme.mutedDark : Theme.mutedLight;
+  const { user } = useAuth();
+  const insets = useSafeAreaInsets();
+  const [habitsState, setHabitsState] = useState<HabitRow[]>([]);
+  const [summary, setSummary] = useState<ProgressState>({
+    weeklyCompletedDays: 0,
+    completedDays: 0,
+    currentStreak: 0,
+    bestStreak: 0,
+  });
+  const [loading, setLoading] = useState(true);
 
-  // Flatten all habits across groups into a single list for the dashboard checklist
-  const allHabits = groups.flatMap((g) => g.habits);
+  const loadDashboard = useCallback(async () => {
+    if (!user) return;
 
-  // Toggle completion status for a habit by upserting a log with the opposite of its current completed value
+    setLoading(true);
+    try {
+      const today = new Date();
+      const todayStr = toDateString(today);
+      const weekStart = getWeekStart(today);
+      const sixMonthsAgo = toDateString(addDays(today, -179));
+
+      const habitRows = await db
+        .select({
+          habitId: habits.id,
+          habitName: habits.name,
+          categoryName: categories.name,
+          categoryColour: categories.colour,
+          categoryIcon: categories.icon,
+        })
+        .from(habits)
+        .innerJoin(categories, eq(habits.categoryId, categories.id))
+        .where(eq(habits.userId, user.id))
+        .orderBy(categories.name, habits.name);
+
+      if (habitRows.length === 0) {
+        setHabitsState([]);
+        setSummary({ weeklyCompletedDays: 0, completedDays: 0, currentStreak: 0, bestStreak: 0 });
+        return;
+      }
+
+      const habitIds = habitRows.map((row) => row.habitId);
+      const [todayLogs, weekLogs, targetRows, historyLogs] = await Promise.all([
+        db
+          .select({ habitId: habitLogs.habitId, completed: habitLogs.completed })
+          .from(habitLogs)
+          .where(and(eq(habitLogs.date, todayStr), inArray(habitLogs.habitId, habitIds))),
+        db
+          .select({ habitId: habitLogs.habitId, completed: habitLogs.completed })
+          .from(habitLogs)
+          .where(and(gte(habitLogs.date, weekStart), lte(habitLogs.date, todayStr), inArray(habitLogs.habitId, habitIds))),
+        db.select().from(targets).where(inArray(targets.habitId, habitIds)),
+        db
+          .select({ date: habitLogs.date, habitId: habitLogs.habitId, completed: habitLogs.completed })
+          .from(habitLogs)
+          .where(and(gte(habitLogs.date, sixMonthsAgo), lte(habitLogs.date, todayStr), inArray(habitLogs.habitId, habitIds))),
+      ]);
+
+      const completedToday = new Set(
+        todayLogs.filter((log) => log.completed === 1).map((log) => log.habitId)
+      );
+      const weeklyDoneByHabit = countCompleted(weekLogs);
+      const weeklyGoals = new Map<number, number>();
+      for (const target of targetRows) {
+        if (target.period === 'weekly') weeklyGoals.set(target.habitId, target.goalCount);
+      }
+
+      setHabitsState(
+        habitRows.map((row) => ({
+          id: row.habitId,
+          name: row.habitName,
+          categoryName: row.categoryName,
+          categoryColour: row.categoryColour,
+          categoryIcon: row.categoryIcon,
+          completed: completedToday.has(row.habitId),
+          weeklyGoal: weeklyGoals.get(row.habitId) ?? null,
+          weeklyDone: weeklyDoneByHabit.get(row.habitId) ?? 0,
+        }))
+      );
+
+      const { dayMap, completedDays } = completedDayStats(historyLogs, habitRows.length, sixMonthsAgo, todayStr);
+      const trackedDates = Array.from(dayMap.keys()).sort();
+      const latestTracked = trackedDates[trackedDates.length - 1] ?? todayStr;
+      const refDate = latestTracked < todayStr ? latestTracked : todayStr;
+      const weeklyCompletedDays = completedDayStats(historyLogs, habitRows.length, weekStart, refDate).completedDays;
+
+      setSummary({
+        weeklyCompletedDays,
+        completedDays,
+        currentStreak: getCurrentStreak(dayMap, habitRows.length, refDate, trackedDates[0]),
+        bestStreak: getBestStreak(dayMap, habitRows.length, trackedDates),
+      });
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
+
+  useFocusEffect(useCallback(() => { loadDashboard(); }, [loadDashboard]));
+
   async function handleToggle(habitId: number) {
-    const habit = allHabits.find((h) => h.id === habitId);
+    const habit = habitsState.find((item) => item.id === habitId);
     if (!habit) return;
-    await upsertLog(habitId, !habit.completed, habit.count);
+
+    const today = toDateString(new Date());
+    const existing = await db
+      .select({ id: habitLogs.id })
+      .from(habitLogs)
+      .where(and(eq(habitLogs.habitId, habitId), eq(habitLogs.date, today)));
+
+    if (existing.length > 0) {
+      await db
+        .update(habitLogs)
+        .set({ completed: habit.completed ? 0 : 1, count: 0 })
+        .where(and(eq(habitLogs.habitId, habitId), eq(habitLogs.date, today)));
+    } else {
+      await db.insert(habitLogs).values({
+        habitId,
+        date: today,
+        completed: habit.completed ? 0 : 1,
+        count: 0,
+      });
+    }
+
+    await loadDashboard();
   }
 
-  const completed = allHabits.filter((h) => h.completed).length;
-  const total = allHabits.length;
-  const topStreak = allHabits.reduce((max, h) => Math.max(max, h.streak), 0);
-  const allDone = completed === total && total > 0;
+  const completed = habitsState.filter((h) => h.completed).length;
+  const total = habitsState.length;
+  const sorted = [...habitsState].sort((a, b) => Number(a.completed) - Number(b.completed));
 
-  // Completed habits sink to bottom
-  const sorted = [...allHabits].sort((a, b) => {
-    if (a.completed === b.completed) return 0;
-    return a.completed ? 1 : -1;
-  });
-
-  // Show loading state while habits are being fetched from the database
   if (loading) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors[scheme].background }}>
-        <ActivityIndicator />
+      <View style={[styles.loading, { backgroundColor: Colors[scheme].background }]}>
+        <ActivityIndicator color={Colors[scheme].tint} />
       </View>
     );
   }
 
   return (
-    <ScrollView
-      style={{ flex: 1, backgroundColor: Colors[scheme].background }}
-      contentContainerStyle={screen.scroll}
-    >
-      {/* Date + status */}
-      <View style={screen.header}>
-        <ThemedText style={[screen.dateLabel, { color: muted }]}>{formatDate()}</ThemedText>
-        {allDone && (
-          <View style={screen.donePill}>
-            <ThemedText style={screen.donePillText}>All Done</ThemedText>
-          </View>
-        )}
-      </View>
-
-      <ChallengeBanner dayNumber={dayNumber} scheme={scheme} />
-
-      <DailyStats completed={completed} total={total} streak={topStreak} scheme={scheme} />
-
-      <View style={{ flexDirection: 'row', gap: 10, marginBottom: 20 }}>
-        <TouchableOpacity
-          style={[screen.checkInBtn, { flex: 1, marginBottom: 0, backgroundColor: '#0a7ea4' }]}
-          onPress={() => router.push('/check-in')}
-          activeOpacity={0.8}
-        >
-          <Text style={screen.checkInBtnText}>📋  Daily Check-In</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[screen.checkInBtn, { flex: 1, marginBottom: 0, backgroundColor: scheme === 'dark' ? '#252525' : '#EFEDE9' }]}
-          onPress={() => router.push('/logs')}
-          activeOpacity={0.8}
-        >
-          <Text style={[screen.checkInBtnText, { color: scheme === 'dark' ? '#9A9590' : '#6B6560' }]}>📖  Log History</Text>
+    <View style={{ flex: 1, backgroundColor: Colors[scheme].background }}>
+      <View
+        style={[
+          styles.pageHeader,
+          {
+            backgroundColor: headerSurface(scheme),
+            paddingTop: insets.top + 12,
+            borderBottomColor: divider(scheme),
+          },
+        ]}
+      >
+        <View style={styles.pageHeaderText}>
+          <ThemedText style={styles.pageTitle}>Today</ThemedText>
+          <ThemedText style={[styles.pageSubtitle, { color: muted(scheme) }]}>{formatDate()}</ThemedText>
+        </View>
+        <TouchableOpacity onPress={() => router.push('/profile')} hitSlop={12} accessibilityLabel="Profile">
+          <IconSymbol name="person.circle.fill" size={26} color={muted(scheme)} />
         </TouchableOpacity>
       </View>
 
-      <ThemedText style={screen.sectionTitle}>{"Today's Checklist"}</ThemedText>
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scroll}>
+        <SummaryCard summary={summary} scheme={scheme} />
+        <DailyStats completed={completed} total={total} scheme={scheme} />
+        <TodayCard
+          completed={completed}
+          total={total}
+          scheme={scheme}
+          onCheckIn={() => router.push('/check-in')}
+          onTargets={() => router.push('/targets')}
+        />
 
-      {sorted.map((h) => (
-        <TaskCard key={h.id} habit={h} onToggle={handleToggle} scheme={scheme} />
-      ))}
+        <HabitsSection total={sorted.length} scheme={scheme}>
+          {sorted.map((habit) => (
+            <DashboardHabit key={habit.id} habit={habit} onToggle={handleToggle} scheme={scheme} />
+          ))}
+        </HabitsSection>
 
-      <View style={{ height: 40 }} />
-    </ScrollView>
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </View>
   );
 }
 
-const screen = StyleSheet.create({
-  scroll: { padding: 20, paddingTop: 56 },
-  header: {
+const styles = StyleSheet.create({
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  scroll: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 8 },
+  pageHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  pageHeaderText: { flex: 1 },
+  pageTitle: { fontSize: 22, fontWeight: '700', lineHeight: 28 },
+  pageSubtitle: { fontSize: 13, lineHeight: 18, marginTop: 2 },
+  panel: {
+    borderRadius: 6,
+    padding: 13,
+    marginBottom: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: '#00000012',
+  },
+  cardTitle: { fontSize: 14, fontWeight: '600', marginBottom: 10 },
+  summaryRows: { marginBottom: 12 },
+  summaryRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 14,
+    gap: 12,
+    paddingVertical: 8,
+    borderBottomWidth: StyleSheet.hairlineWidth,
   },
-  dateLabel: { fontSize: 13, fontWeight: '500' },
-  donePill: {
-    backgroundColor: Theme.green,
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-  },
-  donePillText: { color: '#fff', fontSize: 12, fontWeight: '700' },
-  sectionTitle: {
-    fontSize: 13,
-    fontWeight: '700',
-    letterSpacing: 1.2,
-    textTransform: 'uppercase',
-    opacity: 0.45,
-    marginBottom: 12,
-  },
-  checkInBtn: {
-    borderRadius: 14,
-    paddingVertical: 16,
+  summaryLabel: { fontSize: 13, lineHeight: 18 },
+  summaryValue: { fontSize: 14, fontWeight: '600', lineHeight: 18 },
+  inlineSummary: {
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
+    justifyContent: 'space-between',
+    gap: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: 6,
+    paddingHorizontal: 13,
+    paddingVertical: 11,
+    marginBottom: 10,
   },
-  checkInBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  inlineSummaryValue: { fontSize: 18, fontWeight: '700' },
+  inlineSummaryLabel: { fontSize: 12, marginTop: 2 },
+  inlineSummaryStatus: { fontSize: 12, fontWeight: '700' },
+  checkInCard: { paddingTop: 12 },
+  checkInHeader: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, marginBottom: 12 },
+  checkInCopy: { flex: 1 },
+  checkInSubcopy: { fontSize: 13, lineHeight: 18 },
+  todayCountBadge: {
+    minWidth: 58,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  todayCountValue: { fontSize: 14, fontWeight: '700' },
+  mainAction: {
+    backgroundColor: appColors.tint,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+  },
+  mainActionText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  secondaryAction: { alignItems: 'center', justifyContent: 'center', paddingVertical: 12 },
+  secondaryActionText: { fontSize: 13, fontWeight: '600' },
+  habitsPanel: { paddingTop: 11 },
+  habitsList: { marginTop: -2 },
+  habitRow: {
+    paddingVertical: 11,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  habitRowTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+    marginBottom: 8,
+  },
+  habitMeta: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  habitIconBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  habitIcon: { fontSize: 14 },
+  habitTextBlock: { flex: 1, gap: 2 },
+  habitName: { fontSize: 14, fontWeight: '600', lineHeight: 19 },
+  habitNameDone: { opacity: 0.55 },
+  habitCategory: { fontSize: 12, lineHeight: 16 },
+  habitCheck: {
+    width: 26,
+    height: 26,
+    borderRadius: 5,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  habitCheckText: { color: '#fff', fontSize: 13, fontWeight: '700' },
 });
