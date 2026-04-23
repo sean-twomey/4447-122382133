@@ -1,26 +1,27 @@
-import { ThemedText } from '@/components/themed-text';
+import { HabitCard, ProgressRow, ScreenHeader, appColors, muted } from '@/components/ui';
 import { Colors } from '@/constants/theme';
+import { useAuth } from '@/context/auth';
 import { db } from '@/db/client';
 import { categories, habitLogs, habits } from '@/db/schema';
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { and, eq } from 'drizzle-orm';
-import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
-// Types 
+type HabitType = 'boolean' | 'count';
+
 type HabitEntry = {
   id: number;
   name: string;
-  type: 'boolean' | 'count';
+  type: HabitType;
   categoryColour: string;
   categoryIcon: string;
   completed: boolean;
   count: number;
+  notes: string;
   logExists: boolean;
 };
 
-// Helpers 
 function todayString() {
   return new Date().toISOString().slice(0, 10);
 }
@@ -34,171 +35,28 @@ function formatDate() {
   });
 }
 
-// Count Stepper 
-function CountStepper({
-  value,
-  colour,
-  onDecrement,
-  onIncrement,
-}: {
-  value: number;
-  colour: string;
-  onDecrement: () => void;
-  onIncrement: () => void;
-}) {
-  return (
-    <View style={stepper.row}>
-      <TouchableOpacity
-        style={[stepper.btn, { borderColor: colour + '88' }]}
-        onPress={onDecrement}
-        hitSlop={10}
-      >
-        <ThemedText style={[stepper.btnText, { color: colour }]}>−</ThemedText>
-      </TouchableOpacity>
-      <ThemedText style={stepper.value}>{value}</ThemedText>
-      <TouchableOpacity
-        style={[stepper.btn, { backgroundColor: colour, borderColor: colour }]}
-        onPress={onIncrement}
-        hitSlop={10}
-      >
-        <ThemedText style={[stepper.btnText, { color: '#fff' }]}>+</ThemedText>
-      </TouchableOpacity>
-    </View>
-  );
+// Determines the appropriate unit of measurement for a habit based on its name
+function metricUnit(name: string) {
+  const lower = name.toLowerCase();
+  if (lower.includes('water')) return 'glasses';
+  if (lower.includes('step')) return 'steps';
+  if (lower.includes('meal')) return 'meals';
+  return 'count';
 }
 
-const stepper = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  btn: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  btnText: { fontSize: 20, lineHeight: 22, fontWeight: '600' },
-  value: { fontSize: 20, fontWeight: '700', minWidth: 32, textAlign: 'center' },
-});
-
-// Habit Row 
-function HabitRow({
-  entry,
-  scheme,
-  onToggle,
-  onCount,
-}: {
-  entry: HabitEntry;
-  scheme: 'light' | 'dark';
-  onToggle: (id: number) => void;
-  onCount: (id: number, n: number) => void;
-}) {
-  const cardBg = scheme === 'dark' ? '#1E1E1E' : '#F7F6F4';
-  const { id, name, type, categoryColour, categoryIcon, completed, count } = entry;
-
-  return (
-    <View style={[row.card, { backgroundColor: cardBg }]}>
-      {/* Left colour accent */}
-      <View style={[row.accent, { backgroundColor: completed ? categoryColour : categoryColour + '44' }]} />
-
-      <View style={row.body}>
-        {/* Icon + name */}
-        <View style={row.top}>
-          <View style={[row.iconChip, { backgroundColor: categoryColour + '18' }]}>
-            <ThemedText style={row.icon}>{categoryIcon}</ThemedText>
-          </View>
-          <ThemedText style={[row.name, completed && row.nameDone]}>{name}</ThemedText>
-        </View>
-
-        {/* Control */}
-        {type === 'boolean' ? (
-          <TouchableOpacity
-            style={[
-              row.checkbox,
-              completed
-                ? { backgroundColor: categoryColour, borderColor: categoryColour }
-                : { borderColor: categoryColour + '66' },
-            ]}
-            onPress={() => onToggle(id)}
-            hitSlop={8}
-          >
-            {completed && <ThemedText style={row.tick}>✓</ThemedText>}
-          </TouchableOpacity>
-        ) : (
-          <View style={row.countWrap}>
-            <ThemedText style={[row.glasses, { color: categoryColour }]}>
-              {count} / 16 glasses
-            </ThemedText>
-            <CountStepper
-              value={count}
-              colour={categoryColour}
-              onDecrement={() => onCount(id, Math.max(0, count - 1))}
-              onIncrement={() => onCount(id, count + 1)}
-            />
-          </View>
-        )}
-      </View>
-    </View>
-  );
+function metricSummary(entry: HabitEntry) {
+  if (entry.type !== 'count') return undefined;
+  return `${entry.count} ${metricUnit(entry.name)}`;
 }
-
-const row = StyleSheet.create({
-  card: {
-    flexDirection: 'row',
-    borderRadius: 14,
-    marginBottom: 10,
-    overflow: 'hidden',
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 1,
-  },
-  accent: { width: 5 },
-  body: {
-    flex: 1,
-    padding: 14,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  top: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
-  iconChip: {
-    width: 36,
-    height: 36,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  icon: { fontSize: 18 },
-  name: { fontSize: 15, fontWeight: '600', flex: 1 },
-  nameDone: { opacity: 0.4 },
-  checkbox: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  tick: { color: '#fff', fontSize: 15, fontWeight: '800' },
-  countWrap: { alignItems: 'flex-end', gap: 6 },
-  glasses: { fontSize: 12, fontWeight: '600' },
-});
-
-// Check-In Screen 
 
 export default function CheckInScreen() {
   const scheme = useColorScheme() ?? 'light';
-  const router = useRouter();
-  const btnColour = '#0a7ea4';
-
+  const { user } = useAuth();
   const [entries, setEntries] = useState<HabitEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const inputBg = scheme === 'dark' ? '#2C2C2E' : '#F2F2F7';
 
-  // Load habits + today's logs 
   async function loadTodayState() {
     setLoading(true);
     const today = todayString();
@@ -213,6 +71,7 @@ export default function CheckInScreen() {
       })
       .from(habits)
       .innerJoin(categories, eq(habits.categoryId, categories.id))
+      .where(eq(habits.userId, user!.id))
       .orderBy(categories.name, habits.name);
 
     const todayLogs = await db
@@ -220,16 +79,20 @@ export default function CheckInScreen() {
       .from(habitLogs)
       .where(eq(habitLogs.date, today));
 
-    const built: HabitEntry[] = rows.map((r) => {
-      const log = todayLogs.find((l) => l.habitId === r.habitId);
+    const built: HabitEntry[] = rows.map((row) => {
+      const log = todayLogs.find((item) => item.habitId === row.habitId);
+      const type = row.habitType as HabitType;
+      const count = log?.count ?? 0;
+
       return {
-        id: r.habitId,
-        name: r.habitName,
-        type: r.habitType as 'boolean' | 'count',
-        categoryColour: r.categoryColour,
-        categoryIcon: r.categoryIcon,
-        completed: (log?.completed ?? 0) === 1,
-        count: log?.count ?? 0,
+        id: row.habitId,
+        name: row.habitName,
+        type,
+        categoryColour: row.categoryColour,
+        categoryIcon: row.categoryIcon,
+        completed: type === 'count' ? count > 0 : (log?.completed ?? 0) === 1,
+        count,
+        notes: log?.notes ?? '',
         logExists: !!log,
       };
     });
@@ -238,54 +101,65 @@ export default function CheckInScreen() {
     setLoading(false);
   }
 
-  useEffect(() => { loadTodayState(); }, []);
+  useEffect(() => {
+    loadTodayState();
+  }, []);
 
-  // Local state helpers 
-  function toggleBoolean(id: number) {
+// Toggles the completion state of a boolean habit entry
+  function toggleEntry(id: number) {
     setEntries((prev) =>
-      prev.map((e) => (e.id === id ? { ...e, completed: !e.completed } : e))
+      prev.map((entry) => {
+        if (entry.id !== id || entry.type === 'count') return entry;
+        return { ...entry, completed: !entry.completed };
+      })
     );
   }
 
-  function updateCount(id: number, n: number) {
+  function changeCount(id: number, nextCount: number) {
     setEntries((prev) =>
-      prev.map((e) =>
-        e.id === id ? { ...e, count: n, completed: n > 0 } : e
-      )
+      prev.map((entry) => {
+        if (entry.id !== id) return entry;
+        const count = Math.max(0, nextCount);
+        return { ...entry, count, completed: count > 0 };
+      })
     );
   }
 
-  // Save, insert or update per habit
+  function changeNotes(id: number, notes: string) {
+    setEntries((prev) =>
+      prev.map((entry) => (entry.id === id ? { ...entry, notes } : entry))
+    );
+  }
+
   async function handleSave() {
     setSaving(true);
     const today = todayString();
+
     try {
       for (const entry of entries) {
+        const completed = entry.type === 'count' ? entry.count > 0 : entry.completed;
+        const payload = {
+          completed: completed ? 1 : 0,
+          count: entry.type === 'count' ? entry.count : 0,
+          notes: entry.notes.trim() || null,
+        };
+
         if (entry.logExists) {
-          // update, log already exists for today
           await db
             .update(habitLogs)
-            .set({ completed: entry.completed ? 1 : 0, count: entry.count })
-            .where(
-              and(
-                eq(habitLogs.habitId, entry.id),
-                eq(habitLogs.date, today)
-              )
-            );
+            .set(payload)
+            .where(and(eq(habitLogs.habitId, entry.id), eq(habitLogs.date, today)));
         } else {
-          // insert, no log yet for today
           await db.insert(habitLogs).values({
             habitId: entry.id,
             date: today,
-            completed: entry.completed ? 1 : 0,
-            count: entry.count,
+            ...payload,
           });
         }
       }
 
-      // Reload from db so the screen reflects what was actually persisted
       await loadTodayState();
-      Alert.alert("Saved!", "Today's progress has been logged.");
+      Alert.alert('Logged', "Today's habits have been saved.");
     } catch (e) {
       Alert.alert('Error', 'Could not save. Please try again.');
       console.error(e);
@@ -294,15 +168,13 @@ export default function CheckInScreen() {
     }
   }
 
-  // Calculate summary totals for header
-  const doneCount = entries.filter((e) => e.completed).length;
+  const doneCount = entries.filter((entry) => entry.completed).length;
   const allDone = doneCount === entries.length && entries.length > 0;
 
-  // Show loading state while habits are being fetched from the database
   if (loading) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: Colors[scheme].background }}>
-        <ActivityIndicator size="large" color={btnColour} />
+      <View style={[styles.loading, { backgroundColor: Colors[scheme].background }]}>
+        <ActivityIndicator size="large" color={appColors.tint} />
       </View>
     );
   }
@@ -313,44 +185,83 @@ export default function CheckInScreen() {
       contentContainerStyle={styles.scroll}
       keyboardShouldPersistTaps="handled"
     >
-      {/* Header */}
-      <View style={styles.header}>
-        <ThemedText style={styles.title}>Todays Check-In</ThemedText>
-        <ThemedText style={styles.date}>{formatDate()}</ThemedText>
-      </View>
+      <ScreenHeader title="Daily check-in" subtitle={formatDate()} scheme={scheme} />
 
-      {/* Progress summary */}
-      <View style={[styles.summary, { backgroundColor: allDone ? '#2D6A4F' : scheme === 'dark' ? '#1E1E1E' : '#F0EDE8' }]}>
-        <ThemedText style={[styles.summaryText, allDone && { color: '#fff' }]}>
-          {doneCount} of {entries.length} habits completed
-        </ThemedText>
-        {allDone && (
-          <ThemedText style={styles.perfectDay}>Perfect Day 🏆</ThemedText>
-        )}
-      </View>
+      <ProgressRow
+        done={doneCount}
+        goal={entries.length}
+        colour={allDone ? appColors.success : appColors.tint}
+        scheme={scheme}
+        label={`${doneCount} of ${entries.length} done`}
+        statusText={allDone ? 'Completed' : undefined}
+        statusColour={allDone ? appColors.success : undefined}
+      />
 
-      {/* Habit list */}
       {entries.map((entry) => (
-        <HabitRow
+        <HabitCard
           key={entry.id}
-          entry={entry}
+          name={entry.name}
+          icon={entry.categoryIcon}
+          colour={entry.categoryColour}
+          category={metricSummary(entry)}
+          completed={entry.completed}
           scheme={scheme}
-          onToggle={toggleBoolean}
-          onCount={updateCount}
-        />
+          onPress={entry.type === 'boolean' ? () => toggleEntry(entry.id) : undefined}
+          onToggle={entry.type === 'boolean' ? () => toggleEntry(entry.id) : undefined}
+        >
+          {entry.type === 'count' ? (
+            <View style={styles.metricBlock}>
+              <Text style={[styles.metricLabel, { color: muted(scheme) }]}>Metric</Text>
+              <View style={styles.metricRow}>
+                <TouchableOpacity
+                  style={[styles.metricBtn, { borderColor: entry.categoryColour + '66' }]}
+                  onPress={() => changeCount(entry.id, entry.count - 1)}
+                >
+                  <Text style={[styles.metricBtnText, { color: entry.categoryColour }]}>-</Text>
+                </TouchableOpacity>
+                <TextInput
+                  style={[styles.metricInput, { backgroundColor: inputBg, color: Colors[scheme].text }]}
+                  value={String(entry.count)}
+                  onChangeText={(text) => changeCount(entry.id, Number(text.replace(/[^0-9]/g, '')) || 0)}
+                  keyboardType="number-pad"
+                  accessibilityLabel={`${entry.name} count`}
+                />
+                <TouchableOpacity
+                  style={[styles.metricBtn, { borderColor: entry.categoryColour + '66' }]}
+                  onPress={() => changeCount(entry.id, entry.count + 1)}
+                >
+                  <Text style={[styles.metricBtnText, { color: entry.categoryColour }]}>+</Text>
+                </TouchableOpacity>
+                <Text style={[styles.metricUnit, { color: muted(scheme) }]}>{metricUnit(entry.name)}</Text>
+              </View>
+            </View>
+          ) : null}
+
+          <View style={styles.notesBlock}>
+            <Text style={[styles.metricLabel, { color: muted(scheme) }]}>Notes</Text>
+            <TextInput
+              style={[styles.notesInput, { backgroundColor: inputBg, color: Colors[scheme].text }]}
+              value={entry.notes}
+              onChangeText={(text) => changeNotes(entry.id, text)}
+              placeholder="Optional note"
+              placeholderTextColor={muted(scheme)}
+              accessibilityLabel={`${entry.name} notes`}
+            />
+          </View>
+        </HabitCard>
       ))}
 
-      {/* Save button */}
       <TouchableOpacity
-        style={[styles.saveBtn, { backgroundColor: btnColour }, saving && { opacity: 0.6 }]}
+        style={[styles.saveBtn, saving && styles.saving]}
         onPress={handleSave}
         disabled={saving}
         activeOpacity={0.8}
+        accessibilityLabel="Save today's progress"
       >
         {saving ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.saveBtnText}>Save Todays Progress</Text>
+          <Text style={styles.saveBtnText}>Save today&apos;s log</Text>
         )}
       </TouchableOpacity>
 
@@ -359,28 +270,45 @@ export default function CheckInScreen() {
   );
 }
 
-// Styles 
 const styles = StyleSheet.create({
-  scroll: { padding: 20, paddingTop: 24 },
-
-  header: { marginBottom: 16 },
-  title: { fontSize: 26, fontWeight: '800', letterSpacing: 0.2 },
-  date: { fontSize: 14, opacity: 0.55, marginTop: 4 },
-
-  summary: {
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 20,
-    gap: 4,
+  loading: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  scroll: { padding: 16, paddingTop: 20 },
+  metricBlock: { gap: 8 },
+  metricLabel: { fontSize: 11, fontWeight: '700', letterSpacing: 1 },
+  metricRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  metricBtn: {
+    width: 36,
+    height: 36,
+    borderWidth: 1,
+    borderRadius: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  summaryText: { fontSize: 15, fontWeight: '600' },
-  perfectDay: { color: '#fff', fontSize: 13, fontWeight: '700' },
-
+  metricBtnText: { fontSize: 20, fontWeight: '700' },
+  metricInput: {
+    minWidth: 64,
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    textAlign: 'center',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  metricUnit: { fontSize: 13, flex: 1 },
+  notesBlock: { gap: 8 },
+  notesInput: {
+    borderRadius: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+  },
   saveBtn: {
-    borderRadius: 14,
-    paddingVertical: 18,
+    borderRadius: 6,
+    paddingVertical: 16,
     alignItems: 'center',
     marginTop: 8,
+    backgroundColor: appColors.tint,
   },
-  saveBtnText: { color: '#fff', fontSize: 17, fontWeight: '700' },
+  saving: { opacity: 0.6 },
+  saveBtnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });
