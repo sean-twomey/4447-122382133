@@ -1,43 +1,23 @@
 import { ThemedText } from '@/components/themed-text';
 import { Colors } from '@/constants/theme';
+import { useAuth } from '@/context/auth';
 import { db } from '@/db/client';
 import { categories, habits, targets } from '@/db/schema';
 import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useRouter } from 'expo-router';
+import { eq } from 'drizzle-orm';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  KeyboardAvoidingView,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
-
-// ─── Types ────────────────────────────────────────────────────────────────────
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 type Category = { id: number; name: string; colour: string; icon: string };
-type HabitType = 'boolean' | 'count';
 type Period = 'weekly' | 'monthly';
-
-// ─── Sub-components ───────────────────────────────────────────────────────────
+type HabitType = 'boolean' | 'count';
 
 function SectionLabel({ text }: { text: string }) {
   return <ThemedText style={styles.label}>{text}</ThemedText>;
 }
 
-function OptionPill<T extends string | number>({
-  value,
-  selected,
-  label,
-  colour,
-  onPress,
-  scheme,
-}: {
+function OptionPill<T extends string | number>({ value, selected, label, colour, onPress, scheme }: {
   value: T;
   selected: boolean;
   label: string;
@@ -71,78 +51,150 @@ function OptionPill<T extends string | number>({
   );
 }
 
-// ─── Add Habit Screen ─────────────────────────────────────────────────────────
+function CategoryOption({ category, selected, scheme, onPress }: {
+  category: Category;
+  selected: boolean;
+  scheme: 'light' | 'dark';
+  onPress: (id: number) => void;
+}) {
+  const borderColor = selected
+    ? category.colour
+    : scheme === 'dark'
+      ? '#3A3D3E'
+      : '#D1D5DB';
+  const backgroundColor = selected
+    ? category.colour + '18'
+    : scheme === 'dark'
+      ? '#151718'
+      : '#FFFFFF';
+  const muted = scheme === 'dark' ? '#9BA1A6' : '#687076';
+
+  return (
+    <TouchableOpacity
+      style={[
+        styles.categoryOption,
+        { borderColor, backgroundColor },
+      ]}
+      onPress={() => onPress(category.id)}
+      activeOpacity={0.8}
+    >
+      <View style={[styles.categoryBadge, { backgroundColor: category.colour + '22' }]}>
+        <Text style={styles.categoryBadgeText}>{category.icon}</Text>
+      </View>
+      <View style={{ flex: 1, gap: 2 }}>
+        <ThemedText style={styles.categoryOptionTitle}>{category.name}</ThemedText>
+        <ThemedText style={[styles.categoryOptionSub, { color: muted }]}>
+          {selected ? 'Selected' : 'Tap to choose'}
+        </ThemedText>
+      </View>
+      {selected ? <Text style={[styles.categoryCheck, { color: category.colour }]}>✓</Text> : null}
+    </TouchableOpacity>
+  );
+}
 
 export default function AddHabitScreen() {
   const scheme = useColorScheme() ?? 'light';
   const router = useRouter();
+  const navigation = useNavigation();
+  const { user } = useAuth();
+  const { habitId: habitIdParam } = useLocalSearchParams<{ habitId?: string }>();
+  const editingId = habitIdParam ? Number(habitIdParam) : null;
+
   const tint = Colors[scheme].tint;
   const cardBg = scheme === 'dark' ? '#1E2022' : '#F8F9FA';
   const inputBg = scheme === 'dark' ? '#151718' : '#fff';
   const borderCol = scheme === 'dark' ? '#3A3D3E' : '#D1D5DB';
   const muted = scheme === 'dark' ? '#9BA1A6' : '#687076';
 
-  // ── Form state ──
   const [name, setName] = useState('');
-  const [habitType, setHabitType] = useState<HabitType>('boolean');
   const [selectedCategory, setSelectedCategory] = useState<number | null>(null);
   const [period, setPeriod] = useState<Period>('weekly');
+  const [habitType, setHabitType] = useState<HabitType>('boolean');
   const [goalCount, setGoalCount] = useState('');
 
-  // ── Data ──
   const [categoryList, setCategoryList] = useState<Category[]>([]);
   const [loadingCats, setLoadingCats] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // ── Validation errors ──
   const [errors, setErrors] = useState<{ name?: string; category?: string; goal?: string }>({});
 
   useEffect(() => {
-    db.select().from(categories).then((rows) => {
-      setCategoryList(rows);
-      setLoadingCats(false);
-    });
-  }, []);
+    navigation.setOptions({ title: editingId ? 'Edit habit' : 'Add habit' });
+  }, [navigation, editingId]);
 
-  // ── Validation ──
+  useEffect(() => {
+    async function init() {
+      const cats = await db.select().from(categories).where(eq(categories.userId, user!.id));
+      setCategoryList(cats);
+      setLoadingCats(false);
+
+      if (editingId) {
+        const [habit] = await db.select().from(habits).where(eq(habits.id, editingId));
+        if (habit) {
+          setName(habit.name);
+          setSelectedCategory(habit.categoryId);
+          setHabitType(habit.type as HabitType);
+        }
+        const [target] = await db.select().from(targets).where(eq(targets.habitId, editingId));
+        if (target) {
+          setPeriod(target.period as Period);
+          setGoalCount(String(target.goalCount));
+        }
+      }
+    }
+    init();
+  }, [editingId]);
+
   function validate(): boolean {
     const e: typeof errors = {};
     if (!name.trim()) e.name = 'Habit name is required.';
     if (selectedCategory === null) e.category = 'Please choose a category.';
     if (goalCount !== '') {
       const n = Number(goalCount);
-      if (!Number.isInteger(n) || n < 1) e.goal = 'Goal must be a whole number ≥ 1.';
+      if (!Number.isInteger(n) || n < 1) e.goal = 'Goal must be a whole number of 1 or more.';
     }
     setErrors(e);
     return Object.keys(e).length === 0;
   }
 
-  // ── Save ──
   async function handleSave() {
     if (!validate()) return;
     setSaving(true);
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      if (editingId) {
+        await db
+          .update(habits)
+          .set({ categoryId: selectedCategory!, name: name.trim(), type: habitType })
+          .where(eq(habits.id, editingId));
 
-      // INSERT habit — clearly demonstrating CREATE
-      const [inserted] = await db
-        .insert(habits)
-        .values({
-          userId: 1,
-          categoryId: selectedCategory!,
-          name: name.trim(),
-          type: habitType,
-          createdAt: today,
-        })
-        .returning();
+        await db.delete(targets).where(eq(targets.habitId, editingId));
+        if (goalCount !== '') {
+          await db.insert(targets).values({
+            habitId: editingId,
+            period,
+            goalCount: Number(goalCount),
+          });
+        }
+      } else {
+        const today = new Date().toISOString().slice(0, 10);
+        const [inserted] = await db
+          .insert(habits)
+          .values({
+            userId: user!.id,
+            categoryId: selectedCategory!,
+            name: name.trim(),
+            type: habitType,
+            createdAt: today,
+          })
+          .returning();
 
-      // INSERT target if a goal was supplied
-      if (goalCount !== '') {
-        await db.insert(targets).values({
-          habitId: inserted.id,
-          period,
-          goalCount: Number(goalCount),
-        });
+        if (goalCount !== '') {
+          await db.insert(targets).values({
+            habitId: inserted.id,
+            period,
+            goalCount: Number(goalCount),
+          });
+        }
       }
 
       router.back();
@@ -162,8 +214,6 @@ export default function AddHabitScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
-
-        {/* ── Habit Name ── */}
         <View style={[styles.card, { backgroundColor: cardBg }]}>
           <SectionLabel text="Habit name" />
           <TextInput
@@ -171,7 +221,7 @@ export default function AddHabitScreen() {
               styles.input,
               { backgroundColor: inputBg, borderColor: errors.name ? '#EF4444' : borderCol, color: Colors[scheme].text },
             ]}
-            placeholder="e.g. Morning Run"
+            placeholder="e.g. Morning run"
             placeholderTextColor={muted}
             value={name}
             onChangeText={(t) => { setName(t); setErrors((e) => ({ ...e, name: undefined })); }}
@@ -181,22 +231,22 @@ export default function AddHabitScreen() {
           {errors.name && <ThemedText style={styles.errorText}>{errors.name}</ThemedText>}
         </View>
 
-        {/* ── Category ── */}
         <View style={[styles.card, { backgroundColor: cardBg }]}>
           <SectionLabel text="Category" />
           {loadingCats ? (
             <ActivityIndicator color={tint} />
           ) : (
-            <View style={styles.pillRow}>
+            <View style={styles.categoryList}>
               {categoryList.map((cat) => (
-                <OptionPill
+                <CategoryOption
                   key={cat.id}
-                  value={cat.id}
+                  category={cat}
                   selected={selectedCategory === cat.id}
-                  label={`${cat.icon} ${cat.name}`}
-                  colour={cat.colour}
-                  onPress={(id) => { setSelectedCategory(id); setErrors((e) => ({ ...e, category: undefined })); }}
                   scheme={scheme}
+                  onPress={(id) => {
+                    setSelectedCategory(id);
+                    setErrors((e) => ({ ...e, category: undefined }));
+                  }}
                 />
               ))}
             </View>
@@ -204,14 +254,13 @@ export default function AddHabitScreen() {
           {errors.category && <ThemedText style={styles.errorText}>{errors.category}</ThemedText>}
         </View>
 
-        {/* ── Habit Type ── */}
         <View style={[styles.card, { backgroundColor: cardBg }]}>
-          <SectionLabel text="Habit type" />
+          <SectionLabel text="Metric type" />
           <View style={styles.pillRow}>
             <OptionPill
               value="boolean"
               selected={habitType === 'boolean'}
-              label="✓  Done / Not done"
+              label="Done / not done"
               colour={selectedCat?.colour ?? tint}
               onPress={setHabitType}
               scheme={scheme}
@@ -219,24 +268,22 @@ export default function AddHabitScreen() {
             <OptionPill
               value="count"
               selected={habitType === 'count'}
-              label="# Count-based"
+              label="Numeric count"
               colour={selectedCat?.colour ?? tint}
               onPress={setHabitType}
               scheme={scheme}
             />
           </View>
           <ThemedText style={[styles.hint, { color: muted }]}>
-            {habitType === 'boolean'
-              ? 'Mark as complete once per day (e.g. Meditate, Journal).'
-              : 'Log a number each day (e.g. Glasses of water, Steps).'}
+            {habitType === 'count'
+              ? 'Use this for habits you measure with a number, like glasses, steps or meals.'
+              : 'Use this for habits you simply complete or skip.'}
           </ThemedText>
         </View>
 
-        {/* ── Target ── */}
         <View style={[styles.card, { backgroundColor: cardBg }]}>
           <SectionLabel text="Target (optional)" />
 
-          {/* Period toggle */}
           <View style={styles.pillRow}>
             <OptionPill
               value="weekly"
@@ -256,7 +303,6 @@ export default function AddHabitScreen() {
             />
           </View>
 
-          {/* Goal number */}
           <View style={styles.goalRow}>
             <TextInput
               style={[
@@ -266,14 +312,13 @@ export default function AddHabitScreen() {
               placeholder={period === 'weekly' ? 'e.g. 5' : 'e.g. 20'}
               placeholderTextColor={muted}
               value={goalCount}
+              // Only allow numeric input and update error state on change
               onChangeText={(t) => { setGoalCount(t.replace(/[^0-9]/g, '')); setErrors((e) => ({ ...e, goal: undefined })); }}
               keyboardType="number-pad"
               maxLength={4}
             />
             <ThemedText style={[styles.goalUnit, { color: muted }]}>
-              {habitType === 'boolean'
-                ? `days per ${period === 'weekly' ? 'week' : 'month'}`
-                : `times per ${period === 'weekly' ? 'week' : 'month'}`}
+              {`days per ${period === 'weekly' ? 'week' : 'month'}`}
             </ThemedText>
           </View>
           {errors.goal && <ThemedText style={styles.errorText}>{errors.goal}</ThemedText>}
@@ -284,7 +329,6 @@ export default function AddHabitScreen() {
           )}
         </View>
 
-        {/* ── Save button ── */}
         <TouchableOpacity
           style={[
             styles.saveBtn,
@@ -298,7 +342,7 @@ export default function AddHabitScreen() {
           {saving ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.saveBtnText}>Save Habit</Text>
+            <Text style={styles.saveBtnText}>{editingId ? 'Save changes' : 'Save habit'}</Text>
           )}
         </TouchableOpacity>
 
@@ -308,18 +352,14 @@ export default function AddHabitScreen() {
   );
 }
 
-// ─── Styles ───────────────────────────────────────────────────────────────────
-
 const styles = StyleSheet.create({
-  scroll: { padding: 20, paddingTop: 16 },
-
-  card: { borderRadius: 16, padding: 16, marginBottom: 12, gap: 12 },
-
+  scroll: { padding: 16, paddingTop: 16 },
+  card: { borderRadius: 6, padding: 14, marginBottom: 12, gap: 12 },
   label: { fontSize: 13, fontWeight: '600', opacity: 0.55, textTransform: 'uppercase', letterSpacing: 0.5 },
 
   input: {
     borderWidth: 1,
-    borderRadius: 10,
+    borderRadius: 6,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 16,
@@ -328,11 +368,32 @@ const styles = StyleSheet.create({
   pillRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   pill: {
     borderWidth: 1.5,
-    borderRadius: 20,
+    borderRadius: 6,
     paddingHorizontal: 14,
     paddingVertical: 7,
   },
   pillText: { fontSize: 14, fontWeight: '500' },
+  categoryList: { gap: 10 },
+  categoryOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    borderWidth: 1.5,
+    borderRadius: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  categoryBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  categoryBadgeText: { fontSize: 18 },
+  categoryOptionTitle: { fontSize: 15, fontWeight: '700' },
+  categoryOptionSub: { fontSize: 12 },
+  categoryCheck: { fontSize: 18, fontWeight: '700' },
 
   hint: { fontSize: 12, lineHeight: 18 },
   errorText: { fontSize: 12, color: '#EF4444' },
@@ -340,7 +401,7 @@ const styles = StyleSheet.create({
   goalRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   goalInput: {
     borderWidth: 1,
-    borderRadius: 10,
+    borderRadius: 6,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 20,
@@ -351,7 +412,7 @@ const styles = StyleSheet.create({
   goalUnit: { fontSize: 14, flex: 1 },
 
   saveBtn: {
-    borderRadius: 14,
+    borderRadius: 6,
     paddingVertical: 16,
     alignItems: 'center',
     marginTop: 8,
