@@ -3,6 +3,16 @@ import { openDatabaseSync } from 'expo-sqlite';
 
 const sqlite = openDatabaseSync('habittracker.db');
 
+// Add a column if it doesn't exist 
+function addColumnIfMissing(tableName: string, columnName: string, columnDefinition: string) {
+  const columns = sqlite.getAllSync<{ name: string }>(`PRAGMA table_info(${tableName})`);
+  const hasColumn = columns.some((column) => column.name === columnName);
+
+  if (hasColumn) return;
+
+  sqlite.execSync(`ALTER TABLE ${tableName} ADD COLUMN ${columnDefinition};`);
+}
+
 sqlite.execSync(`
   CREATE TABLE IF NOT EXISTS users (
     id         INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
@@ -43,5 +53,7 @@ sqlite.execSync(`
     goal_count INTEGER NOT NULL
   );
 `);
+
+addColumnIfMissing('habit_logs', 'notes', 'notes TEXT');
 
 export const db = drizzle(sqlite);

@@ -20,21 +20,22 @@ export const habits = sqliteTable('habits', {
   userId: integer('user_id').notNull(),
   categoryId: integer('category_id').notNull(),
   name: text('name').notNull(),
-  type: text('type').notNull(), // 'boolean' | 'count'
+  type: text('type').notNull(),
   createdAt: text('created_at').notNull(),
 });
 
 export const habitLogs = sqliteTable('habit_logs', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   habitId: integer('habit_id').notNull(),
-  date: text('date').notNull(), // YYYY-MM-DD
+  date: text('date').notNull(),
   completed: integer('completed').notNull().default(0),
   count: integer('count').notNull().default(0),
+  notes: text('notes'),
 });
 
 export const targets = sqliteTable('targets', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   habitId: integer('habit_id').notNull(),
-  period: text('period').notNull(), // 'weekly' | 'monthly'
+  period: text('period').notNull(),
   goalCount: integer('goal_count').notNull(),
 });

@@ -1,3 +1,4 @@
+import { hashPassword } from '@/utils/hash';
 import { db } from './client';
 import { categories, habitLogs, habits, targets, users } from './schema';
 
@@ -9,16 +10,16 @@ export async function seedIfEmpty() {
   // User
   const [user] = await db
     .insert(users)
-    .values({ email: 'demo@habits.app', passwordHash: 'demo', createdAt: '2026-03-01' })
+    .values({ email: 'demo@habits.app', passwordHash: hashPassword('demo'), createdAt: '2026-03-01' })
     .returning();
 
   // Categories matching the 75 Hard challenge UI
   const cats = await db
     .insert(categories)
     .values([
-      { userId: user.id, name: 'Exercise',    colour: '#3A7D5A', icon: '🏃' },
-      { userId: user.id, name: 'Hydration',   colour: '#2E6E8E', icon: '💧' },
-      { userId: user.id, name: 'Nutrition',   colour: '#B07D3A', icon: '🥗' },
+      { userId: user.id, name: 'Exercise', colour: '#3A7D5A', icon: '🏃' },
+      { userId: user.id, name: 'Hydration', colour: '#2E6E8E', icon: '💧' },
+      { userId: user.id, name: 'Nutrition', colour: '#B07D3A', icon: '🥗' },
       { userId: user.id, name: 'Mindfulness', colour: '#6B5B8A', icon: '📖' },
     ])
     .returning();
@@ -29,12 +30,12 @@ export async function seedIfEmpty() {
   const insertedHabits = await db
     .insert(habits)
     .values([
-      { userId: user.id, categoryId: exercise.id,    name: 'Workout 1 (45 min)',          type: 'boolean', createdAt: '2026-03-01' },
-      { userId: user.id, categoryId: exercise.id,    name: 'Workout 2 — Outdoor (45 min)', type: 'boolean', createdAt: '2026-03-01' },
-      { userId: user.id, categoryId: hydration.id,   name: 'Drink 1 Gallon of Water',      type: 'count',   createdAt: '2026-03-01' },
-      { userId: user.id, categoryId: nutrition.id,   name: 'Follow Diet Plan',             type: 'boolean', createdAt: '2026-03-01' },
-      { userId: user.id, categoryId: nutrition.id,   name: 'No Alcohol or Cheat Meals',    type: 'boolean', createdAt: '2026-03-01' },
-      { userId: user.id, categoryId: mindfulness.id, name: 'Read 10 Pages of Nonfiction',  type: 'boolean', createdAt: '2026-03-01' },
+      { userId: user.id, categoryId: exercise.id, name: 'Workout 1 (45 min)', type: 'boolean', createdAt: '2026-03-01' },
+      { userId: user.id, categoryId: exercise.id, name: 'Workout 2 — Outdoor (45 min)', type: 'boolean', createdAt: '2026-03-01' },
+      { userId: user.id, categoryId: hydration.id, name: 'Drink 1 Gallon of Water', type: 'count', createdAt: '2026-03-01' },
+      { userId: user.id, categoryId: nutrition.id, name: 'Follow Diet Plan', type: 'boolean', createdAt: '2026-03-01' },
+      { userId: user.id, categoryId: nutrition.id, name: 'No Alcohol or Cheat Meals', type: 'boolean', createdAt: '2026-03-01' },
+      { userId: user.id, categoryId: mindfulness.id, name: 'Read 10 Pages of Nonfiction', type: 'boolean', createdAt: '2026-03-01' },
     ])
     .returning();
 
@@ -42,46 +43,63 @@ export async function seedIfEmpty() {
 
   // Weekly targets (daily habits = goal of 7 per week; water = 7 gallons/week)
   await db.insert(targets).values([
-    { habitId: workout1.id,  period: 'weekly', goalCount: 7 },
-    { habitId: workout2.id,  period: 'weekly', goalCount: 7 },
-    { habitId: water.id,     period: 'weekly', goalCount: 7 },
-    { habitId: diet.id,      period: 'weekly', goalCount: 7 },
+    { habitId: workout1.id, period: 'weekly', goalCount: 7 },
+    { habitId: workout2.id, period: 'weekly', goalCount: 7 },
+    { habitId: water.id, period: 'weekly', goalCount: 7 },
+    { habitId: diet.id, period: 'weekly', goalCount: 7 },
     { habitId: noAlcohol.id, period: 'weekly', goalCount: 7 },
-    { habitId: reading.id,   period: 'weekly', goalCount: 7 },
+    { habitId: reading.id, period: 'weekly', goalCount: 7 },
   ]);
 
-  // 51 days of historical logs (2026-03-01 to 2026-04-20)
-  // Adherence improves over time to show realistic progress in charts
+  // 53 tracked days of historical logs 
   const logs: { habitId: number; date: string; completed: number; count: number }[] = [];
-  const startDate = new Date('2026-03-01');
+  const startMs = Date.UTC(2026, 2, 1); // 2026-03-01 in UTC
+  const TOTAL_DAYS = 53;
+  const imperfectDays = new Map<number, { missedHabits: number[]; waterCount: number }>([
+    [0, { missedHabits: [reading.id], waterCount: 17 }],
+    [2, { missedHabits: [workout2.id], waterCount: 16 }],
+    [5, { missedHabits: [water.id], waterCount: 15 }],
+    [6, { missedHabits: [diet.id], waterCount: 16 }],
+    [8, { missedHabits: [workout1.id], waterCount: 17 }],
+    [10, { missedHabits: [reading.id], waterCount: 16 }],
+    [13, { missedHabits: [water.id], waterCount: 14 }],
+    [14, { missedHabits: [noAlcohol.id], waterCount: 17 }],
+    [17, { missedHabits: [workout2.id], waterCount: 16 }],
+    [19, { missedHabits: [reading.id], waterCount: 18 }],
+    [21, { missedHabits: [workout1.id], waterCount: 16 }],
+    [24, { missedHabits: [water.id], waterCount: 15 }],
+    [28, { missedHabits: [diet.id], waterCount: 17 }],
+    [37, { missedHabits: [workout2.id], waterCount: 18 }],
+    [41, { missedHabits: [reading.id], waterCount: 16 }],
+    [42, { missedHabits: [water.id], waterCount: 15 }],
+    [48, { missedHabits: [workout1.id], waterCount: 17 }],
+  ]);
+  const trackedHabits = [workout1, workout2, water, diet, noAlcohol, reading];
 
-  for (let i = 0; i < 51; i++) {
-    const d = new Date(startDate);
-    d.setDate(startDate.getDate() + i);
+  function buildWaterCount(dayIndex: number, missed: boolean, overrideCount: number) {
+    if (missed) return overrideCount;
+
+    const gallonCounts = [16, 17, 18, 16, 19, 17, 18];
+    return gallonCounts[dayIndex % gallonCounts.length];
+  }
+
+  for (let i = 0; i < TOTAL_DAYS; i++) {
+    const d = new Date(startMs + i * 86_400_000);
     const date = d.toISOString().slice(0, 10);
-    const progress = i / 50; // 0 → 1 over the 51 days
+    const imperfectDay = imperfectDays.get(i);
+    const missedHabits = imperfectDay?.missedHabits ?? [];
 
-    // Boolean habits — adherence climbs from ~65% to ~90%
-    const boolRate = 0.65 + progress * 0.25;
+    for (const habit of trackedHabits) {
+      const missed = missedHabits.includes(habit.id);
+      const isWater = habit.id === water.id;
 
-    if (Math.random() < boolRate)
-      logs.push({ habitId: workout1.id, date, completed: 1, count: 0 });
-
-    if (Math.random() < boolRate - 0.05)
-      logs.push({ habitId: workout2.id, date, completed: 1, count: 0 });
-
-    if (Math.random() < boolRate + 0.05)
-      logs.push({ habitId: diet.id, date, completed: 1, count: 0 });
-
-    if (Math.random() < boolRate + 0.08)
-      logs.push({ habitId: noAlcohol.id, date, completed: 1, count: 0 });
-
-    if (Math.random() < boolRate)
-      logs.push({ habitId: reading.id, date, completed: 1, count: 0 });
-
-    // Water — count of glasses (target = 16 glasses = 1 gallon)
-    const glasses = Math.min(Math.floor(8 + Math.random() * 10 + progress * 4), 20);
-    logs.push({ habitId: water.id, date, completed: glasses >= 16 ? 1 : 0, count: glasses });
+      logs.push({
+        habitId: habit.id,
+        date,
+        completed: missed ? 0 : 1,
+        count: isWater ? buildWaterCount(i, missed, imperfectDay?.waterCount ?? 16) : 0,
+      });
+    }
   }
 
   await db.insert(habitLogs).values(logs);
