@@ -88,6 +88,12 @@ export default function LoginScreen() {
               : <Text style={s.btnText}>Sign in</Text>
             }
           </Pressable>
+
+          <View style={s.demoHint}>
+            <Text style={[s.demoHintLabel, { color: muted }]}>Demo account:</Text>
+            <Text style={[s.demoHintText, { color: muted }]}>demo@habits.app</Text>
+            <Text style={[s.demoHintText, { color: muted }]}>Password: demo</Text>
+          </View>
         </View>
 
         <View style={s.footer}>
@@ -149,6 +155,18 @@ const s = StyleSheet.create({
   },
   btnDisabled: { opacity: 0.6 },
   btnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  demoHint: {
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  demoHintLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  demoHintText: {
+    fontSize: 13,
+    lineHeight: 18,
+  },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
