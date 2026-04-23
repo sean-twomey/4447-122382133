@@ -532,9 +532,13 @@ export default function LogsScreen() {
     (filters.completedOnly !== null ? 1 : 0);
 
   const loadLogs = useCallback(async (query: string, activeFilters: Filters) => {
+    if (!user) {
+      setLogs([]);
+      return;
+    }
     setLoading(true);
     try {
-      const conditions = [eq(habits.userId, user!.id)];
+      const conditions = [eq(habits.userId, user.id)];
       if (activeFilters.from && isValidDate(activeFilters.from)) conditions.push(gte(habitLogs.date, activeFilters.from));
       if (activeFilters.to && isValidDate(activeFilters.to)) conditions.push(lte(habitLogs.date, activeFilters.to));
       if (activeFilters.completedOnly === true) conditions.push(eq(habitLogs.completed, 1));
@@ -576,7 +580,7 @@ export default function LogsScreen() {
     }
   }, [user]);
 
-  useEffect(() => { loadLogs('', emptyFilters); }, [loadLogs]);
+  useEffect(() => { if (user) { loadLogs('', emptyFilters); } }, [loadLogs, user]);
 
   function toggleHabit(habitId: number) {
     setOpenHabitIds((prev) => {
