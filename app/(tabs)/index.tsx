@@ -6,10 +6,14 @@ import { useAuth } from '@/context/auth';
 import { db } from '@/db/client';
 import { categories, habitLogs, habits, targets } from '@/db/schema';
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useWeather } from '@/hooks/use-weather';
 import { and, eq, gte, inArray, lte } from 'drizzle-orm';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Image, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
+const LOGO_LIGHT = require('@/assets/images/logo-light.png');
+const LOGO_DARK = require('@/assets/images/logo-dark.png');
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type HabitRow = {
@@ -147,7 +151,7 @@ function SummaryCard({
 
   return (
     <View style={[styles.panel, { backgroundColor: surface(scheme) }]}>
-      <ThemedText style={styles.cardTitle}>Weekly progress</ThemedText>
+      <ThemedText style={styles.cardTitle}>75 Hard Progress</ThemedText>
       <View style={styles.summaryRows}>
         {rows.map((row) => (
           <View key={row.label} style={[styles.summaryRow, { borderBottomColor: divider(scheme) }]}>
@@ -157,12 +161,12 @@ function SummaryCard({
         ))}
       </View>
       <ProgressRow
-        done={summary.weeklyCompletedDays}
-        goal={7}
+        done={summary.completedDays}
+        goal={75}
         colour={appColors.tint}
         scheme={scheme}
-        label="Weekly completion"
-        rightText={`${summary.weeklyCompletedDays}/7`}
+        label="Days completed"
+        rightText={`${summary.completedDays}/75`}
       />
     </View>
   );
@@ -309,6 +313,7 @@ export default function DashboardScreen() {
   const router = useRouter();
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
+  const weather = useWeather();
   const [habitsState, setHabitsState] = useState<HabitRow[]>([]);
   const [summary, setSummary] = useState<ProgressState>({
     weeklyCompletedDays: 0,
@@ -457,8 +462,15 @@ export default function DashboardScreen() {
         ]}
       >
         <View style={styles.pageHeaderText}>
-          <ThemedText style={styles.pageTitle}>Today</ThemedText>
-          <ThemedText style={[styles.pageSubtitle, { color: muted(scheme) }]}>{formatDate()}</ThemedText>
+          <Image source={scheme === 'dark' ? LOGO_DARK : LOGO_LIGHT} style={styles.headerLogo} resizeMode="contain" />
+          <View style={styles.pageSubtitleRow}>
+            <ThemedText style={[styles.pageSubtitle, { color: muted(scheme) }]}>{formatDate()}</ThemedText>
+            {!weather.loading && !weather.error && weather.temperature !== null && (
+              <ThemedText style={[styles.pageSubtitle, { color: muted(scheme) }]}>
+                {'  ·  '}{weather.temperature}°C · {weather.condition} · Cork
+              </ThemedText>
+            )}
+          </View>
         </View>
         <TouchableOpacity onPress={() => router.push('/profile')} hitSlop={12} accessibilityLabel="Profile">
           <IconSymbol name="person.circle.fill" size={26} color={muted(scheme)} />
@@ -500,6 +512,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   pageHeaderText: { flex: 1 },
+  headerLogo: { width: 140, height: 40, marginBottom: 4 },
+  pageSubtitleRow: { flexDirection: 'row', alignItems: 'center' },
   pageTitle: { fontSize: 22, fontWeight: '700', lineHeight: 28 },
   pageSubtitle: { fontSize: 13, lineHeight: 18, marginTop: 2 },
   panel: {
